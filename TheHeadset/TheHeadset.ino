@@ -1,8 +1,56 @@
+// SimplePid class from CurioRes' multiple encoder pid control tutorial
+// A class to compute the control signal
+class SimplePID{
+  private:
+    float kp, kd, ki, umax; // Parameters
+    float eprev, eintegral; // Storage
+
+  public:
+  // Constructor
+  SimplePID() : kp(1), kd(0), ki(0), umax(255), eprev(0.0), eintegral(0.0){}
+
+  // A function to set the parameters
+  void setParams(float kpIn, float kdIn, float kiIn, float umaxIn){
+    kp = kpIn; kd = kdIn; ki = kiIn; umax = umaxIn;
+  }
+
+  // A function to compute the control signal
+  void evalu(int value, int target, float deltaT, int &pwr, int &dir){
+    // error
+    int e = target - value;
+  
+    // derivative
+    float dedt = (e-eprev)/(deltaT);
+  
+    // integral
+    eintegral = eintegral + e*deltaT;
+  
+    // control signal
+    float u = kp*e + kd*dedt + ki*eintegral;
+  
+    // motor power
+    pwr = (int) fabs(u);
+    if( pwr > umax ){
+      pwr = umax;
+    }
+  
+    // motor direction
+    dir = 1;
+    if(u<0){
+      dir = -1;
+    }
+  
+    // store previous error
+    eprev = e;
+  }
+  
+};
+
 #include <OneWire.h>
 #include <DallasTemperature.h>
 
 // Define Sensors
-#define ONE_WIRE_BUS 2 // Pin # of Sensor 1
+#define ONE_WIRE_BUS 4 // Pin # of Sensor 1
 #define TWO_WIRE_BUS 10 // Pin # of Sensor 2
 OneWire oneWire(ONE_WIRE_BUS);
 OneWire twoWire(TWO_WIRE_BUS);
@@ -17,16 +65,16 @@ int directionPin = 12;
 int pwmPin = 3;
 int brakePin = 9;
 // Encoder #1
-#define ENCODER_1A 4 // Yellow on shield, white on motor
+#define ENCODER_1A 2 // Yellow on shield, white on motor
 #define ENCODER_1B 5 // White on shield, green on motor
 
 //uncomment if using channel B, and remove above definitions
-//int directionPin = 13;
-//int pwmPin = 11;
-//int brakePin = 8;
+int directionPinTwo = 13;
+int pwmPinTwo = 11;
+int brakePinTwo = 8;
 // Encoder #2
-// #define ENCODER_2A = 6;
-// #define ENCODER_2B = 7;
+#define ENCODER_2A 3
+#define ENCODER_2B 7
 
 //boolean to switch motor direction
 bool directionState = false;
@@ -47,13 +95,18 @@ void setup() {
   pinMode(directionPin, OUTPUT);
   pinMode(pwmPin, OUTPUT);
   pinMode(brakePin, OUTPUT);
+  pinMode(directionPinTwo, OUTPUT);
+  pinMode(pwmPinTwo, OUTPUT);
+  pinMode(brakePinTwo, OUTPUT);
   pinMode(ENCODER_1A,INPUT);
   pinMode(ENCODER_1B, INPUT);
+  pinMode(ENCODER_2A, INPUT);
+  pinMode(ENCODER_2B, INPUT);
   // Interrupts whenever ENCODER_1A rises.
   // readEncoder is the function that should be called when interrupted
   attachInterrupt(digitalPinToInterrupt(ENCODER_1A),readEncoder,RISING);
-  // analogWrite(pwmPin, 100);
-  
+  attachInterrupt(digitalPinToInterrupt(ENCODER_2A),readEncoderTwo,RISING);
+  analogWrite(pwmPinTwo, 100);
 }
 
 
@@ -62,6 +115,15 @@ void loop() {
   // updateTemperatures();
   updatePID();
 
+  int a = digitalRead(ENCODER_2A);
+  int b = digitalRead(ENCODER_2B);
+  /*
+  Serial.print(a);
+  Serial.print(" ");
+  Serial.print(b);
+  Serial.println(" ");
+  delay(500);
+  */
   /*
   //change direction every loop()
   directionState = !directionState;
@@ -120,26 +182,29 @@ void updatePID() {
 
   Serial.print("Position of 1st encoder: ");
   Serial.println(posOne);
+  Serial.print("Position of 2nd encoder: ");
+  Serial.println(posTwo);
+
+  // Basic testing for Motor #1
   int error = target - posOne;
   if (error > 0) {
     if (error > 100) {
       error = 100;
     }
-    setMotor(1, error, pwmPin);
+    setMotor(-1, error, pwmPin);
   } else if (error < 0) {
     if (error < -100) {
       error = -100;
     }
-    setMotor(-1, error, pwmPin);
+    setMotor(1, directionPin, error, pwmPin);
   } else {
-    setMotor(0, 0, pwmPin);
+    setMotor(0, directionPin, 0, pwmPin);
+    Serial.println("ZERO");
   }
 }
 
 // Called when encoder1A changes state
 void readEncoder() {
-  Serial.println("readEncoder called");
-  delay(500);
   int oneB = digitalRead(ENCODER_1B);
   if (oneB > 0) {
     posOne++;
@@ -150,8 +215,8 @@ void readEncoder() {
 
 // Called when encoder2A changes state
 void readEncoderTwo() {
-  // int twoB = digitalRead(ENCODER_2B);
-  int twoB = 0;
+  //Serial.println("ENCODER 2 CALLED");
+  int twoB = digitalRead(ENCODER_2B);
   if (twoB > 0) {
     posTwo++;
   } else {
@@ -159,13 +224,16 @@ void readEncoderTwo() {
   }
 }
 
-void setMotor(int dir, int pwmVal, int pwm) {
-  analogWrite(pwm, pwmVal);
+void setMotor(int dir, int dirPin, int pwmVal, int pwmPin) {
   if (dir==1) {
-    digitalWrite(directionPin, HIGH);
+    digitalWrite(dirPin, HIGH);
+    //set work duty for the motor
+    analogWrite(pwmPin, pwmVal);
   } else if (dir == -1) {
-    digitalWrite(directionPin, LOW);
+    digitalWrite(dirPin, LOW);
+    //set work duty for the motor
+    analogWrite(pwmPin, pwmVal);
   } else {
-    analogWrite(pwm, 0);
+    analogWrite(pwmPin, 0);
   }
 }
