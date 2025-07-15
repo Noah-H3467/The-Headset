@@ -1,3 +1,5 @@
+#include <util/atomic.h>
+#include <QuadratureEncoder.h>
 // SimplePid class from CurioRes' multiple encoder pid control tutorial
 // A class to compute the control signal
 class SimplePID{
@@ -25,6 +27,10 @@ class SimplePID{
     // integral
     eintegral = eintegral + e*deltaT;
   
+    // TODO: make this a parameter in the constructor
+    // static constant
+    float ks = 50;
+
     // control signal
     float u = kp*e + kd*dedt + ki*eintegral;
   
@@ -32,11 +38,13 @@ class SimplePID{
     pwr = (int) fabs(u);
     if( pwr > umax ){
       pwr = umax;
+    } else if (pwr < ks) {
+      pwr = ks;
     }
   
     // motor direction
     dir = 1;
-    if(u<0){
+    if(u>0){
       dir = -1;
     }
   
@@ -60,30 +68,41 @@ DallasTemperature sensor2(&twoWire);
 // Serial
 // SoftwareSerial display(3, 2);
 
-// Motor #1
-int directionPin = 12;
-int pwmPin = 3;
-int brakePin = 9;
-// Encoder #1
-#define ENCODER_1A 2 // Yellow on shield, white on motor
-#define ENCODER_1B 5 // White on shield, green on motor
-
-//uncomment if using channel B, and remove above definitions
-int directionPinTwo = 13;
-int pwmPinTwo = 11;
-int brakePinTwo = 8;
-// Encoder #2
-#define ENCODER_2A 3
-#define ENCODER_2B 7
+// Number of motors
+#define NMOTORS 2
+// TODO: Swap wiring of the two motors and respective encoders
+// Power wires already swapped. Will check to see if I need to swap the encoder wires for each.
+const int DIRECTION_PINS[] = {12, 13};
+const int PWM_PINS[] = {3, 11};
+const int BRAKE_PINS[] = {9, 8};
+Encoders firstEncoder(2,5);
+Encoders secondEncoder(6,7); // the encoder objects could use analog pins
 
 //boolean to switch motor direction
 bool directionState = false;
 
-// Position of each motor
-int posOne = 0;
-int posTwo = 0;
-// Target position
-int target = 100;
+// Initial target position
+const int highPos = 1000;
+const int lowPos = 0;
+int target[] = {highPos, highPos};
+
+// Globals
+long prevT = 0;
+
+// PID class instance list length 2
+SimplePID pid[NMOTORS];
+int STATIC_GAIN[] = {255, 73}; // 255, 73
+
+// Counter for printing position on the serial
+int counter = 0;
+
+// Define button pins
+// https://forum.arduino.cc/t/using-analog-pins-for-push-buttons/309407/7
+const int leftButton = A0;
+const int rightButton = A1;
+// Records the button state. Either HIGH or LOW.
+int leftButtonState = HIGH;
+int rightButtonState = HIGH;
 
 void setup() {
   Serial.begin(9600);
@@ -91,69 +110,39 @@ void setup() {
   sensor2.begin();
   
   //define pins
-  // Motor + Encoder #1
-  pinMode(directionPin, OUTPUT);
-  pinMode(pwmPin, OUTPUT);
-  pinMode(brakePin, OUTPUT);
-  pinMode(directionPinTwo, OUTPUT);
-  pinMode(pwmPinTwo, OUTPUT);
-  pinMode(brakePinTwo, OUTPUT);
-  pinMode(ENCODER_1A,INPUT);
-  pinMode(ENCODER_1B, INPUT);
-  pinMode(ENCODER_2A, INPUT);
-  pinMode(ENCODER_2B, INPUT);
-  // Interrupts whenever ENCODER_1A rises.
-  // readEncoder is the function that should be called when interrupted
-  attachInterrupt(digitalPinToInterrupt(ENCODER_1A),readEncoder,RISING);
-  attachInterrupt(digitalPinToInterrupt(ENCODER_2A),readEncoderTwo,RISING);
-  analogWrite(pwmPinTwo, 100);
+  for (int k = 0; k < NMOTORS; k++) {
+    // ENCODER
+    // pinMode(ENCODER_ONE[k],INPUT); // TODO: UNCOMMENT
+    // pinMode(ENCODER_TWO[k], INPUT);
+    // MOTOR
+    pinMode(DIRECTION_PINS[k], OUTPUT);
+    pinMode(PWM_PINS[k], OUTPUT);
+    pinMode(BRAKE_PINS[k], OUTPUT);
+
+    pid[k].setParams(1,0.15,0.0,255);
+  }
+
+  resetEncoders();
+  // Tell Motor #1 to stop
+  setMotor(1, DIRECTION_PINS[0], 0.0, PWM_PINS[0]);
+
+  // Initialize the button pins as inputs:
+  pinMode(leftButton, INPUT);   
+  pinMode(rightButton, INPUT);
 }
 
+unsigned long lastMilli = 0;
 
 void loop() {
-  // Currently gets thermometer reading and prints it to the serial.
-  // updateTemperatures();
-  updatePID();
 
-  int a = digitalRead(ENCODER_2A);
-  int b = digitalRead(ENCODER_2B);
-  /*
-  Serial.print(a);
-  Serial.print(" ");
-  Serial.print(b);
-  Serial.println(" ");
-  delay(500);
-  */
-  /*
-  //change direction every loop()
-  directionState = !directionState;
+  if (millis()-lastMilli > 20) {
+    // Currently gets thermometer reading and prints it to the serial.
+    // updateTemperatures();
+    updateButtonState();
+    updatePID();
 
-  //write a low state to the direction pin (13)
-  if(directionState == false){
-    digitalWrite(directionPin, LOW);
+    lastMilli = millis();  
   }
-
-  //write a high state to the direction pin (13)
-  else{
-    digitalWrite(directionPin, HIGH);
-  }
-
-  //release breaks
-  digitalWrite(brakePin, LOW);
-
-  //set work duty for the motor
-  analogWrite(pwmPin, 100);
-
-  delay(2000);
-
-  //activate breaks
-  digitalWrite(brakePin, HIGH);
-
-  //set work duty for the motor to 0 (off)
-  analogWrite(pwmPin, 0);
-
-  delay(2000); // */
-
 }
 
 void updateTemperatures() {
@@ -180,48 +169,50 @@ void updateTemperatures() {
 
 void updatePID() {
 
-  Serial.print("Position of 1st encoder: ");
-  Serial.println(posOne);
-  Serial.print("Position of 2nd encoder: ");
-  Serial.println(posTwo);
+  // time difference
+  long currT = micros();
+  float deltaT = ((float) (currT - prevT))/( 1.0e6 );
+  prevT = currT;
 
-  // Basic testing for Motor #1
-  int error = target - posOne;
-  if (error > 0) {
-    if (error > 100) {
-      error = 100;
-    }
-    setMotor(-1, error, pwmPin);
-  } else if (error < 0) {
-    if (error < -100) {
-      error = -100;
-    }
-    setMotor(1, directionPin, error, pwmPin);
-  } else {
-    setMotor(0, directionPin, 0, pwmPin);
-    Serial.println("ZERO");
+  long firstPos = firstEncoder.getEncoderCount();
+  long secondPos = secondEncoder.getEncoderCount();
+  
+  lastMilli = millis();  
+
+  long pos[2];
+  pos[0] = firstPos;
+  pos[1] = secondPos;
+
+  // loop through the motors
+  for(int k = 0; k < NMOTORS; k++){
+    int pwr, dir;
+    // evaluate the control signal
+    pid[k].evalu(pos[k], target[k], deltaT, pwr, dir);
+    // signal the motor - for now, test static gain instead of PID
+    setMotor(dir, DIRECTION_PINS[k], pwr, PWM_PINS[k]);
   }
+
+  if (counter % 10 == 0) {
+    for(int k = 0; k < NMOTORS; k++){
+      if (k == 1) {
+      Serial.print("                                                     ");
+      }
+      Serial.print("Target of motor ");
+      Serial.print(k+1);
+      Serial.print(": ");
+      Serial.print(target[k]);
+      Serial.print(" ");
+      Serial.print("Position of encoder: ");
+      Serial.print(pos[k]);
+      Serial.println(" ");
+    }
+  }
+  counter++;
 }
 
-// Called when encoder1A changes state
-void readEncoder() {
-  int oneB = digitalRead(ENCODER_1B);
-  if (oneB > 0) {
-    posOne++;
-  } else {
-    posOne--;
-  }
-}
-
-// Called when encoder2A changes state
-void readEncoderTwo() {
-  //Serial.println("ENCODER 2 CALLED");
-  int twoB = digitalRead(ENCODER_2B);
-  if (twoB > 0) {
-    posTwo++;
-  } else {
-    posTwo--;
-  }
+void resetEncoders() {
+  firstEncoder.setEncoderCount(0.0);
+  secondEncoder.setEncoderCount(0.0);
 }
 
 void setMotor(int dir, int dirPin, int pwmVal, int pwmPin) {
@@ -236,4 +227,38 @@ void setMotor(int dir, int dirPin, int pwmVal, int pwmPin) {
   } else {
     analogWrite(pwmPin, 0);
   }
+}
+
+void updateButtonState() {
+  // Checks to see if the new reading is the same as the existing state
+  if (leftButtonState != digitalRead(leftButton)) {
+    // If not, Update to the leftButtonState
+    leftButtonState = digitalRead(leftButton);
+    if (leftButtonState == HIGH) {
+      // If the button was just pressed, toggle the target position
+      if (target[0] == highPos) {
+        target[0] = lowPos;
+      } else {
+        target[0] = highPos;
+      }
+    }
+  }
+
+  // Checks to see if the new reading is the same as the existing state
+  if (rightButtonState != digitalRead(rightButton)) {
+    // If not, Update to the rightButtonState
+    rightButtonState = digitalRead(rightButton);
+    if (rightButtonState == HIGH) {
+      // If the button was just pressed, toggle the target position
+      if (target[1] == highPos) {
+        target[1] = lowPos;
+      } else {
+        target[1] = highPos;
+      }
+    }
+  }
+  // Serial.print("Targets: ");
+  // Serial.print(target[0]);
+  // Serial.print("   ");
+  // Serial.println(target[1]);
 }
