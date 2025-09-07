@@ -62,16 +62,16 @@ class SimplePID{
 #define TWO_WIRE_BUS 10 // Pin # of Sensor 2
 OneWire oneWire(ONE_WIRE_BUS);
 OneWire twoWire(TWO_WIRE_BUS);
-DallasTemperature sensor1(&oneWire);
-DallasTemperature sensor2(&twoWire);
+DallasTemperature sensor1(&oneWire); // Left
+DallasTemperature sensor2(&twoWire); // Right
 
 // Serial
 // SoftwareSerial display(3, 2);
 
 // Number of motors
 #define NMOTORS 2
-// TODO: Swap wiring of the two motors and respective encoders
 // Power wires already swapped. Will check to see if I need to swap the encoder wires for each.
+// {Right Motor, Left Motor}
 const int DIRECTION_PINS[] = {12, 13};
 const int PWM_PINS[] = {3, 11};
 const int BRAKE_PINS[] = {9, 8};
@@ -82,7 +82,7 @@ Encoders secondEncoder(6,7); // the encoder objects could use analog pins
 bool directionState = false;
 
 // Initial target position
-const int highPos = 1000;
+const int highPos = 200;
 const int lowPos = 0;
 int target[] = {highPos, highPos};
 
@@ -100,9 +100,12 @@ int counter = 0;
 // https://forum.arduino.cc/t/using-analog-pins-for-push-buttons/309407/7
 const int leftButton = A0;
 const int rightButton = A1;
+// Press this to zero the encoders. TODO: Make the press of this button start homing
+const int homeButton = A2;
 // Records the button state. Either HIGH or LOW.
-int leftButtonState = HIGH;
-int rightButtonState = HIGH;
+int leftButtonState = LOW;
+int rightButtonState = LOW;
+bool homeButtonState = LOW;
 
 void setup() {
   Serial.begin(9600);
@@ -119,7 +122,7 @@ void setup() {
     pinMode(PWM_PINS[k], OUTPUT);
     pinMode(BRAKE_PINS[k], OUTPUT);
 
-    pid[k].setParams(1,0.15,0.0,255);
+    pid[k].setParams(2,0.15,0.0,255);
   }
 
   resetEncoders();
@@ -129,35 +132,57 @@ void setup() {
   // Initialize the button pins as inputs:
   pinMode(leftButton, INPUT);   
   pinMode(rightButton, INPUT);
+  pinMode(homeButton, INPUT);
 }
 
 unsigned long lastMilli = 0;
+unsigned long lastTempMilli = 0; // To be able to run long temperature stuff that takes a second while checking PID
+unsigned long lastTempInProgressMilli = 0;
 
 void loop() {
 
+  if (millis()-lastTempMilli >= 30000) {
+    lastTempMilli = millis();
+    requestTemps();
+    lastTempInProgressMilli = millis();
+
+    while (millis()-lastTempInProgressMilli < 750) {
+      if (millis()-lastMilli > 20) {
+        lastMilli = millis();  
+
+        updateButtonState();
+        updatePID();
+      }
+    }
+    updateTemperatures();
+  }
   if (millis()-lastMilli > 20) {
-    // Currently gets thermometer reading and prints it to the serial.
-    // updateTemperatures();
+    lastMilli = millis();  
+
     updateButtonState();
     updatePID();
 
-    lastMilli = millis();  
   }
 }
 
+void requestTemps() {
+  // Get temperatures
+  sensor1.requestTemperatures();
+  sensor2.requestTemperatures();
+}
+
+// requestTemps() must be called at least 0.75 seconds before calling this
+// Currently gets thermometer reading and prints it to the serial.
 void updateTemperatures() {
-  // Get and print temperature
   sensor1.requestTemperatures();
   sensor2.requestTemperatures();
   delay(750);
-  //if (temperatureC != DEVICE_DISCONNECTED_C) {
   Serial.print("Sensor 1: Celsius temperature: ");
   // Why "byIndex"? You can have more than one IC on the same bus. 0 refers to the first IC on the wire
   Serial.print(sensor1.getTempCByIndex(0)); 
   Serial.print(" - Fahrenheit temperature: ");
   Serial.println(sensor1.getTempFByIndex(0));
   Serial.print("Sensor 2: Celsius temperature: ");
-  // Why "byIndex"? You can have more than one IC on the same bus. 0 refers to the first IC on the wire
   Serial.print(sensor2.getTempCByIndex(0)); 
   Serial.print(" - Fahrenheit temperature: ");
   Serial.println(sensor2.getTempFByIndex(0));
@@ -189,7 +214,13 @@ void updatePID() {
     // evaluate the control signal
     pid[k].evalu(pos[k], target[k], deltaT, pwr, dir);
     // signal the motor - for now, test static gain instead of PID
-    setMotor(dir, DIRECTION_PINS[k], pwr, PWM_PINS[k]);
+    // Flip direction for Right Arm motor aka the 1st motor
+    if (k==0){
+      dir *= -1;
+      setMotor(dir, DIRECTION_PINS[k], pwr, PWM_PINS[k]);
+    } else {
+      setMotor(dir, DIRECTION_PINS[k], pwr, PWM_PINS[k]);
+    }
   }
 
   if (counter % 10 == 0) {
@@ -261,4 +292,12 @@ void updateButtonState() {
   // Serial.print(target[0]);
   // Serial.print("   ");
   // Serial.println(target[1]);
+  
+  // Zero the motor encoders right when home button is pressed
+  if (homeButtonState != digitalRead(homeButton)) {
+    homeButtonState = digitalRead(homeButton);
+    if (homeButtonState == HIGH) {
+      resetEncoders();
+    }
+  }
 }
