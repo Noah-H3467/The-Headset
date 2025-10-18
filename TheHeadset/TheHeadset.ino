@@ -82,8 +82,8 @@ Encoders secondEncoder(6,7); // the encoder objects could use analog pins
 bool directionState = false;
 
 // Initial target position
-const int highPos = 200;
-const int lowPos = 0;
+const int highPos = 800;
+const int lowPos = -50;
 int target[] = {highPos, highPos};
 
 // Globals
@@ -122,7 +122,7 @@ void setup() {
     pinMode(PWM_PINS[k], OUTPUT);
     pinMode(BRAKE_PINS[k], OUTPUT);
 
-    pid[k].setParams(2,0.15,0.0,255);
+    pid[k].setParams(3,0.15,0.0,255);
   }
 
   resetEncoders();
@@ -174,9 +174,6 @@ void requestTemps() {
 // requestTemps() must be called at least 0.75 seconds before calling this
 // Currently gets thermometer reading and prints it to the serial.
 void updateTemperatures() {
-  sensor1.requestTemperatures();
-  sensor2.requestTemperatures();
-  delay(750);
   Serial.print("Sensor 1: Celsius temperature: ");
   // Why "byIndex"? You can have more than one IC on the same bus. 0 refers to the first IC on the wire
   Serial.print(sensor1.getTempCByIndex(0)); 
@@ -198,15 +195,12 @@ void updatePID() {
   long currT = micros();
   float deltaT = ((float) (currT - prevT))/( 1.0e6 );
   prevT = currT;
-
-  long firstPos = firstEncoder.getEncoderCount();
-  long secondPos = secondEncoder.getEncoderCount();
   
   lastMilli = millis();  
 
   long pos[2];
-  pos[0] = firstPos;
-  pos[1] = secondPos;
+  pos[0] = -firstEncoder.getEncoderCount();
+  pos[1] = secondEncoder.getEncoderCount();
 
   // loop through the motors
   for(int k = 0; k < NMOTORS; k++){
@@ -242,8 +236,8 @@ void updatePID() {
 }
 
 void resetEncoders() {
-  firstEncoder.setEncoderCount(0.0);
-  secondEncoder.setEncoderCount(0.0);
+  firstEncoder.setEncoderCount(-20.0);
+  secondEncoder.setEncoderCount(-20.0);
 }
 
 void setMotor(int dir, int dirPin, int pwmVal, int pwmPin) {
