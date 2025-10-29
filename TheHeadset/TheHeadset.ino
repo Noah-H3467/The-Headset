@@ -1,15 +1,14 @@
 #include <util/atomic.h>
 #include <QuadratureEncoder.h>
-// SimplePid class from CurioRes' multiple encoder pid control tutorial
-// A class to compute the control signal
+/* Based on a SimplePID class from CurioRes' multiple encoder pid control tutorial to compute the control signal */
 class SimplePID{
   private:
-    float kp, kd, ki, umax; // Parameters
+    float kp, kd, ki, ks, umax; // Parameters
     float eprev, eintegral; // Storage
 
   public:
   // Constructor
-  SimplePID() : kp(1), kd(0), ki(0), umax(255), eprev(0.0), eintegral(0.0){}
+  SimplePID() : kp(1), kd(0), ki(0), ks(50), umax(255), eprev(0.0), eintegral(0.0){}
 
   // A function to set the parameters
   void setParams(float kpIn, float kdIn, float kiIn, float umaxIn){
@@ -26,10 +25,6 @@ class SimplePID{
   
     // integral
     eintegral = eintegral + e*deltaT;
-  
-    // TODO: make this a parameter in the constructor
-    // static constant
-    float ks = 50;
 
     // control signal
     float u = kp*e + kd*dedt + ki*eintegral;
@@ -51,7 +46,6 @@ class SimplePID{
     // store previous error
     eprev = e;
   }
-  
 };
 
 #include <OneWire.h>
@@ -65,12 +59,6 @@ OneWire twoWire(TWO_WIRE_BUS);
 DallasTemperature sensor1(&oneWire); // Left
 DallasTemperature sensor2(&twoWire); // Right
 
-// Serial
-// SoftwareSerial display(3, 2);
-
-// Number of motors
-#define NMOTORS 2
-// Power wires already swapped. Will check to see if I need to swap the encoder wires for each.
 // {Right Motor, Left Motor}
 const int DIRECTION_PINS[] = {12, 13};
 const int PWM_PINS[] = {3, 11};
@@ -89,9 +77,9 @@ int target[] = {highPos, highPos};
 // Globals
 long prevT = 0;
 
-// PID class instance list length 2
-SimplePID pid[NMOTORS];
-int STATIC_GAIN[] = {255, 73}; // 255, 73
+// PID class instance list length 2 - number of motors
+SimplePID pid[2];
+int STATIC_GAIN[] = {255, 73}; // for each motor
 
 // Counter for printing position on the serial
 int counter = 0;
@@ -114,15 +102,12 @@ void setup() {
   
   //define pins
   for (int k = 0; k < NMOTORS; k++) {
-    // ENCODER
-    // pinMode(ENCODER_ONE[k],INPUT); // TODO: UNCOMMENT
-    // pinMode(ENCODER_TWO[k], INPUT);
     // MOTOR
     pinMode(DIRECTION_PINS[k], OUTPUT);
     pinMode(PWM_PINS[k], OUTPUT);
     pinMode(BRAKE_PINS[k], OUTPUT);
 
-    pid[k].setParams(3,0.15,0.0,255);
+    pid[k].setParams(3,0.15,0.0,50,255);
   }
 
   resetEncoders();
@@ -175,7 +160,7 @@ void requestTemps() {
 // Currently gets thermometer reading and prints it to the serial.
 void updateTemperatures() {
   Serial.print("Sensor 1: Celsius temperature: ");
-  // Why "byIndex"? You can have more than one IC on the same bus. 0 refers to the first IC on the wire
+  // Why "byIndex"? One can have more than one IC on the same bus. 0 refers to the first IC on the wire
   Serial.print(sensor1.getTempCByIndex(0)); 
   Serial.print(" - Fahrenheit temperature: ");
   Serial.println(sensor1.getTempFByIndex(0));
@@ -183,9 +168,7 @@ void updateTemperatures() {
   Serial.print(sensor2.getTempCByIndex(0)); 
   Serial.print(" - Fahrenheit temperature: ");
   Serial.println(sensor2.getTempFByIndex(0));
-  // } else {
-  //  Serial.println("Error: Could not read temperature");
-  //}
+
   delay(1000); // Update every second
 }
 
@@ -282,10 +265,6 @@ void updateButtonState() {
       }
     }
   }
-  // Serial.print("Targets: ");
-  // Serial.print(target[0]);
-  // Serial.print("   ");
-  // Serial.println(target[1]);
   
   // Zero the motor encoders right when home button is pressed
   if (homeButtonState != digitalRead(homeButton)) {
