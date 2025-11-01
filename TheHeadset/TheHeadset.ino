@@ -1,6 +1,11 @@
 #include <util/atomic.h>
+#include <DallasTemperature.h>
+#include <OneWire.h>
 #include <QuadratureEncoder.h>
-/* Based on a SimplePID class from CurioRes' multiple encoder pid control tutorial to compute the control signal */
+
+/* Based on a SimplePID class from CurioRes to compute the control signal. 
+  I used it out of convenience to familiarize myself with class structure in C++.
+  https://github.com/curiores/ArduinoTutorials/blob/main/MultipleEncoders/SimplePositionPID/SimplePositionPID.ino */
 class SimplePID{
   private:
     float kp, kd, ki, ks, umax; // Parameters
@@ -11,8 +16,8 @@ class SimplePID{
   SimplePID() : kp(1), kd(0), ki(0), ks(50), umax(255), eprev(0.0), eintegral(0.0){}
 
   // A function to set the parameters
-  void setParams(float kpIn, float kdIn, float kiIn, float umaxIn){
-    kp = kpIn; kd = kdIn; ki = kiIn; umax = umaxIn;
+  void setParams(float kpIn, float kdIn, float kiIn, float ksIn, float umaxIn){
+    kp = kpIn; kd = kdIn; ki = kiIn; ks = ksIn; umax = umaxIn;
   }
 
   // A function to compute the control signal
@@ -48,9 +53,6 @@ class SimplePID{
   }
 };
 
-#include <OneWire.h>
-#include <DallasTemperature.h>
-
 // Define Sensors
 #define ONE_WIRE_BUS 4 // Pin # of Sensor 1
 #define TWO_WIRE_BUS 10 // Pin # of Sensor 2
@@ -74,7 +76,7 @@ const int highPos = 800;
 const int lowPos = -50;
 int target[] = {highPos, highPos};
 
-// Globals
+// For PID time calculation
 long prevT = 0;
 
 // PID class instance list length 2 - number of motors
@@ -101,7 +103,7 @@ void setup() {
   sensor2.begin();
   
   //define pins
-  for (int k = 0; k < NMOTORS; k++) {
+  for (int k = 0; k < 2; k++) {
     // MOTOR
     pinMode(DIRECTION_PINS[k], OUTPUT);
     pinMode(PWM_PINS[k], OUTPUT);
@@ -126,6 +128,7 @@ unsigned long lastTempInProgressMilli = 0;
 
 void loop() {
 
+  /* Request and report temperature ever 30 sec */
   if (millis()-lastTempMilli >= 30000) {
     lastTempMilli = millis();
     requestTemps();
@@ -186,11 +189,11 @@ void updatePID() {
   pos[1] = secondEncoder.getEncoderCount();
 
   // loop through the motors
-  for(int k = 0; k < NMOTORS; k++){
+  for(int k = 0; k < 2; k++){
     int pwr, dir;
     // evaluate the control signal
     pid[k].evalu(pos[k], target[k], deltaT, pwr, dir);
-    // signal the motor - for now, test static gain instead of PID
+    // signal the motor
     // Flip direction for Right Arm motor aka the 1st motor
     if (k==0){
       dir *= -1;
@@ -199,9 +202,9 @@ void updatePID() {
       setMotor(dir, DIRECTION_PINS[k], pwr, PWM_PINS[k]);
     }
   }
-
+  // Print arm information every 10x this function is called
   if (counter % 10 == 0) {
-    for(int k = 0; k < NMOTORS; k++){
+    for(int k = 0; k < 2; k++){
       if (k == 1) {
       Serial.print("                                                     ");
       }
@@ -219,6 +222,7 @@ void updatePID() {
 }
 
 void resetEncoders() {
+  // Through testing, -20 ticks has been more effective than 0
   firstEncoder.setEncoderCount(-20.0);
   secondEncoder.setEncoderCount(-20.0);
 }
