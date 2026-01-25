@@ -1,3 +1,14 @@
+/** 
+ * Copyright (C) 2026 Noah Haskell
+ * File: main.cpp
+ * Author: Noah Haskell
+ * Program Description:
+ * "The Headset" is currently a prototype to automate the application of a cold compress on the wearer's eyes. 
+ * This is intended to treat eye itching and pain caused by allergies.
+ * This is the main code file for the Headset.
+*/
+
+#include <Arduino.h>
 #include <util/atomic.h>
 #include <DallasTemperature.h>
 #include <OneWire.h>
@@ -5,7 +16,28 @@
 
 /* Based on a SimplePID class from CurioRes to compute the control signal. 
   I used it out of convenience to familiarize myself with class structure in C++.
+  Therefore, this SimplePID class is under the MIT License:
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
   https://github.com/curiores/ArduinoTutorials/blob/main/MultipleEncoders/SimplePositionPID/SimplePositionPID.ino */
+  
 class SimplePID{
   private:
     float kp, kd, ki, ks, umax; // Parameters
@@ -97,61 +129,9 @@ int leftButtonState = LOW;
 int rightButtonState = LOW;
 bool homeButtonState = LOW;
 
-void setup() {
-  Serial.begin(9600);
-  sensor1.begin();
-  sensor2.begin();
-  
-  //define pins
-  for (int k = 0; k < 2; k++) {
-    // MOTOR
-    pinMode(DIRECTION_PINS[k], OUTPUT);
-    pinMode(PWM_PINS[k], OUTPUT);
-    pinMode(BRAKE_PINS[k], OUTPUT);
-
-    pid[k].setParams(3,0.15,0.0,50,255);
-  }
-
-  resetEncoders();
-  // Tell Motor #1 to stop
-  setMotor(1, DIRECTION_PINS[0], 0.0, PWM_PINS[0]);
-
-  // Initialize the button pins as inputs:
-  pinMode(leftButton, INPUT);   
-  pinMode(rightButton, INPUT);
-  pinMode(homeButton, INPUT);
-}
-
 unsigned long lastMilli = 0;
 unsigned long lastTempMilli = 0; // To be able to run long temperature stuff that takes a second while checking PID
 unsigned long lastTempInProgressMilli = 0;
-
-void loop() {
-
-  /* Request and report temperature ever 30 sec */
-  if (millis()-lastTempMilli >= 30000) {
-    lastTempMilli = millis();
-    requestTemps();
-    lastTempInProgressMilli = millis();
-
-    while (millis()-lastTempInProgressMilli < 750) {
-      if (millis()-lastMilli > 20) {
-        lastMilli = millis();  
-
-        updateButtonState();
-        updatePID();
-      }
-    }
-    updateTemperatures();
-  }
-  if (millis()-lastMilli > 20) {
-    lastMilli = millis();  
-
-    updateButtonState();
-    updatePID();
-
-  }
-}
 
 void requestTemps() {
   // Get temperatures
@@ -173,6 +153,20 @@ void updateTemperatures() {
   Serial.println(sensor2.getTempFByIndex(0));
 
   delay(1000); // Update every second
+}
+
+void setMotor(int dir, int dirPin, int pwmVal, int pwmPin) {
+  if (dir==1) {
+    digitalWrite(dirPin, HIGH);
+    //set work duty for the motor
+    analogWrite(pwmPin, pwmVal);
+  } else if (dir == -1) {
+    digitalWrite(dirPin, LOW);
+    //set work duty for the motor
+    analogWrite(pwmPin, pwmVal);
+  } else {
+    analogWrite(pwmPin, 0);
+  }
 }
 
 void updatePID() {
@@ -227,20 +221,6 @@ void resetEncoders() {
   secondEncoder.setEncoderCount(-20.0);
 }
 
-void setMotor(int dir, int dirPin, int pwmVal, int pwmPin) {
-  if (dir==1) {
-    digitalWrite(dirPin, HIGH);
-    //set work duty for the motor
-    analogWrite(pwmPin, pwmVal);
-  } else if (dir == -1) {
-    digitalWrite(dirPin, LOW);
-    //set work duty for the motor
-    analogWrite(pwmPin, pwmVal);
-  } else {
-    analogWrite(pwmPin, 0);
-  }
-}
-
 void updateButtonState() {
   // Checks to see if the new reading is the same as the existing state
   if (leftButtonState != digitalRead(leftButton)) {
@@ -276,5 +256,59 @@ void updateButtonState() {
     if (homeButtonState == HIGH) {
       resetEncoders();
     }
+  }
+}
+
+void setup() 
+{
+  Serial.begin(9600);
+  sensor1.begin();
+  sensor2.begin();
+  
+  //define pins
+  for (int k = 0; k < 2; k++) {
+    // MOTOR
+    pinMode(DIRECTION_PINS[k], OUTPUT);
+    pinMode(PWM_PINS[k], OUTPUT);
+    pinMode(BRAKE_PINS[k], OUTPUT);
+
+    pid[k].setParams(3,0.15,0.0,50,255);
+  }
+
+  resetEncoders();
+  // Tell Motor #1 to stop
+  setMotor(1, DIRECTION_PINS[0], 0.0, PWM_PINS[0]);
+
+  // Initialize the button pins as inputs:
+  pinMode(leftButton, INPUT);   
+  pinMode(rightButton, INPUT);
+  pinMode(homeButton, INPUT);
+}
+
+void loop() 
+{
+
+  /* Request and report temperature ever 30 sec */
+  if (millis()-lastTempMilli >= 30000) {
+    lastTempMilli = millis();
+    requestTemps();
+    lastTempInProgressMilli = millis();
+
+    while (millis()-lastTempInProgressMilli < 750) {
+      if (millis()-lastMilli > 20) {
+        lastMilli = millis();  
+
+        updateButtonState();
+        updatePID();
+      }
+    }
+    updateTemperatures();
+  }
+  if (millis()-lastMilli > 20) {
+    lastMilli = millis();  
+
+    updateButtonState();
+    updatePID();
+
   }
 }
