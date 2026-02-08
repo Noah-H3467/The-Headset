@@ -1,0 +1,6 @@
+{
+    "license-header-manager.excludeFolders": [
+        "CAD", "Documentation"
+    ],
+    "editor.formatOnSave": true
+}
