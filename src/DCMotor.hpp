@@ -126,7 +126,7 @@ public:
         else if (dir == 1)
         {
             // Forward direction
-            outputDebugLine("--------------------FORWARD");
+            // outputDebugLine("--------------------FORWARD");
             digitalWrite(pinIDs[0], HIGH);
             digitalWrite(pinIDs[1], LOW);
             analogWrite(pinIDs[2], pwm);
@@ -134,7 +134,7 @@ public:
         else if (dir == -1)
         {
             // Reverse direction
-            outputDebugLine("--------------------REVERSE");
+            // outputDebugLine("--------------------REVERSE");
             digitalWrite(pinIDs[0], LOW);
             digitalWrite(pinIDs[1], HIGH);
             analogWrite(pinIDs[2], pwm);

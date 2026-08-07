@@ -131,10 +131,17 @@ void setup()
   rightThermo.setup();
   motorA.begin();
   motorB.begin();
+  leftButton.setup();
+  rightButton.setup();
+  eStopButton.setup();
   Serial.begin(9600);
 }
 
 void checkButtons() {
+  leftButton.periodic();
+  rightButton.periodic();
+  eStopButton.periodic();
+
   if (leftButton.onRisingEdge()) {
     // If the button was just pressed, toggle the matching arm state
     leftArmState = !leftArmState;
