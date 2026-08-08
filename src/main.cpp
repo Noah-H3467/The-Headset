@@ -1,326 +1,203 @@
-/** 
- * Copyright (C) 2026 Noah Haskell
- *
- * This program is free software: you can redistribute it and/or modify it under the terms of the
- * GNU General Public License as published by the Free Software Foundation, either version 3 of the
- * License, or any later version.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
- * even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License along with this program. If
- * not, see <https://www.gnu.org/licenses/>.
- * 
- * File: main.cpp
- * Author: Noah Haskell
- * Program Description:
- * "The Headset" is currently a prototype to automate the application of a cold compress on the wearer's eyes. 
- * This is intended to treat eye itching and pain caused by allergies.
- * This is the main code file for the Headset. Its key role is to contain the high level logic.
-*/
+/* 
+ *  Copyright (C) 2026 Noah Haskell
+ *  
+ *  This program is free software: you can redistribute it and/or modify it under the terms of the
+ *  GNU General Public License as published by the Free Software Foundation, either version 3 of the
+ *  License, or any later version.
+ *  
+ *  This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
+ *  even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ *  General Public License for more details.
+ *  
+ *  You should have received a copy of the GNU General Public License along with this program. If
+ *  not, see <https://www.gnu.org/licenses/>.
+ *  
+ *  File: main.cpp
+ *  Author: Noah Haskell
+ *  Description: "The Headset" is currently a prototype to automate the application of a cold compress on the wearer's eyes. 
+ *  This is intended to treat eye itching and pain caused by allergies.
+ *  This is the main code file for the Headset. Its key role is to contain the high level logic for the microcontroller.
+ */
 
 #include <Arduino.h>
-#include <util/atomic.h>
+// #include <util/atomic.h>
 #include <DallasTemperature.h>
+#include "DCMotor.hpp"
+#include "DigitalInput.hpp"
+#include "Constants.hpp"
 #include <OneWire.h>
-#include <QuadratureEncoder.h>
+#include "Thermometer.hpp"
 
-/* Based on a SimplePID class from CurioRes to compute the control signal. 
-  I used it out of convenience to familiarize myself with class structure in C++.
-  Therefore, this SimplePID class is under the MIT License:
-
-    Permission is hereby granted, free of charge, to any person obtaining a copy
-    of this software and associated documentation files (the "Software"), to deal
-    in the Software without restriction, including without limitation the rights
-    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-    copies of the Software, and to permit persons to whom the Software is
-    furnished to do so, subject to the following conditions:
-
-    The above copyright notice and this permission notice shall be included in all
-    copies or substantial portions of the Software.
-
-    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-    SOFTWARE.
-
-  https://github.com/curiores/ArduinoTutorials/blob/main/MultipleEncoders/SimplePositionPID/SimplePositionPID.ino */
-
-class SimplePID{
-  private:
-    float kp, kd, ki, ks, umax; // Parameters
-    float eprev, eintegral; // Storage
-
-  public:
-  // Constructor
-  SimplePID() : kp(1), kd(0), ki(0), ks(50), umax(255), eprev(0.0), eintegral(0.0){}
-
-  // A function to set the parameters
-  void setParams(float kpIn, float kdIn, float kiIn, float ksIn, float umaxIn){
-    kp = kpIn; kd = kdIn; ki = kiIn; ks = ksIn; umax = umaxIn;
-  }
-
-  // A function to compute the control signal
-  void evalu(int value, int target, float deltaT, int &pwr, int &dir){
-    // error
-    int e = target - value;
-  
-    // derivative
-    float dedt = (e-eprev)/(deltaT);
-  
-    // integral
-    eintegral = eintegral + e*deltaT;
-
-    // control signal
-    float u = kp*e + kd*dedt + ki*eintegral;
-  
-    // motor power
-    pwr = (int) fabs(u);
-    if( pwr > umax ){
-      pwr = umax;
-    } else if (pwr < ks) {
-      pwr = ks;
-    }
-  
-    // motor direction
-    dir = 1;
-    if(u>0){
-      dir = -1;
-    }
-  
-    // store previous error
-    eprev = e;
-  }
-};
+bool ledState = false;
 
 // Define Sensors
-#define ONE_WIRE_BUS 4 // Pin # of Sensor 1
-#define TWO_WIRE_BUS 10 // Pin # of Sensor 2
-OneWire oneWire(ONE_WIRE_BUS);
-OneWire twoWire(TWO_WIRE_BUS);
-DallasTemperature sensor1(&oneWire); // Left
-DallasTemperature sensor2(&twoWire); // Right
+Thermometer leftThermo(Constants::ONE_WIRE_BUS_LEFT, Constants::THERMOMETER_PERIOD_MS);
+Thermometer rightThermo(Constants::ONE_WIRE_BUS_RIGHT, Constants::THERMOMETER_PERIOD_MS);
 
-// {Right Motor, Left Motor}
-const int DIRECTION_PINS[] = {12, 13};
-const int PWM_PINS[] = {3, 11};
-const int BRAKE_PINS[] = {9, 8};
-Encoders firstEncoder(2,5);
-Encoders secondEncoder(6,7); // the encoder objects could use analog pins
+// Initial target outputs - high {left, right}
+int setpoints[Constants::MOTOR_COUNT] = {Constants::TO_HIGH_POS_OUTPUT, Constants::TO_HIGH_POS_OUTPUT};
 
-//boolean to switch motor direction
-bool directionState = false;
+// Global DCMotor instances: safe because constructor does not call Arduino APIs.
+DCMotor motorA(Constants::MOTOR_A_PINS, 3, Constants::INVERT_MOTOR_A);
+DCMotor motorB(Constants::MOTOR_B_PINS, 3, Constants::INVERT_MOTOR_B);
 
-// Initial target position
-const int highPos = 800;
-const int lowPos = -50;
-int target[] = {highPos, highPos};
-
-// For PID time calculation
-long prevT = 0;
-
-// PID class instance list length 2 - number of motors
-SimplePID pid[2];
-int STATIC_GAIN[] = {255, 73}; // for each motor
-
-// Counter for printing position on the serial
-int counter = 0;
-
-// Define button pins
+// Define button pins to toggle arms
 // https://forum.arduino.cc/t/using-analog-pins-for-push-buttons/309407/7
-const int leftButton = A0;
-const int rightButton = A1;
-// Press this to zero the encoders. TODO: Make the press of this button start homing
-const int homeButton = A2;
-// Records the button state. Either HIGH or LOW.
-int leftButtonState = LOW;
-int rightButtonState = LOW;
-bool homeButtonState = LOW;
+bool leftArmState = false; // HIGH = false (off eye)
+bool rightArmState = false; // LOW = true (on eye)
+DigitalInput leftButton(Constants::LEFT_BUTTON, Constants::BUTTON_PULLUP, Constants::BUTTON_DEBOUNCE_RISING_MS, Constants::BUTTON_DEBOUNCE_FALLING_MS); // Verify if there is no pullup resistor
+DigitalInput rightButton(Constants::RIGHT_BUTTON, Constants::BUTTON_PULLUP, Constants::BUTTON_DEBOUNCE_RISING_MS, Constants::BUTTON_DEBOUNCE_FALLING_MS);
+DigitalInput eStopButton(Constants::E_STOP_BUTTON, Constants::BUTTON_PULLUP, Constants::BUTTON_DEBOUNCE_RISING_MS, Constants::BUTTON_DEBOUNCE_FALLING_MS);
+bool eStopEnabled = false;
 
-unsigned long lastMilli = 0;
-unsigned long lastTempMilli = 0; // To be able to run long temperature stuff that takes a second while checking PID
-unsigned long lastTempInProgressMilli = 0;
-
-void requestTemps() {
-  // Get temperatures
-  sensor1.requestTemperatures();
-  sensor2.requestTemperatures();
+void setLed(bool on) {
+  ledState = on;
+  digitalWrite(Constants::LED_PIN, on ? LOW : HIGH);
 }
 
-// requestTemps() must be called at least 0.75 seconds before calling this
-// Currently gets thermometer reading and prints it to the serial.
-void updateTemperatures() {
-  Serial.print("Sensor 1: Celsius temperature: ");
-  // Why "byIndex"? One can have more than one IC on the same bus. 0 refers to the first IC on the wire
-  Serial.print(sensor1.getTempCByIndex(0)); 
-  Serial.print(" - Fahrenheit temperature: ");
-  Serial.println(sensor1.getTempFByIndex(0));
-  Serial.print("Sensor 2: Celsius temperature: ");
-  Serial.print(sensor2.getTempCByIndex(0)); 
-  Serial.print(" - Fahrenheit temperature: ");
-  Serial.println(sensor2.getTempFByIndex(0));
-
-  delay(1000); // Update every second
+// Test Only (for the Bridge and python program)
+int getSensor() {
+  return leftButton.getDebounced();
 }
 
-void setMotor(int dir, int dirPin, int pwmVal, int pwmPin) {
-  if (dir==1) {
-    digitalWrite(dirPin, HIGH);
-    //set work duty for the motor
-    analogWrite(pwmPin, pwmVal);
-  } else if (dir == -1) {
-    digitalWrite(dirPin, LOW);
-    //set work duty for the motor
-    analogWrite(pwmPin, pwmVal);
+/* Meant to be called by the bridge*/
+bool getState(int side) {
+  outputDebugLine("GET STATE CALLED");
+  if (side == 1) {
+    return rightArmState;
+  } else if (side == 0) {
+    return leftArmState;
   } else {
-    analogWrite(pwmPin, 0);
+    return false;
   }
 }
 
-void updatePID() {
-
-  // time difference
-  long currT = micros();
-  float deltaT = ((float) (currT - prevT))/( 1.0e6 );
-  prevT = currT;
-  
-  lastMilli = millis();  
-
-  long pos[2];
-  pos[0] = -firstEncoder.getEncoderCount();
-  pos[1] = secondEncoder.getEncoderCount();
-
-  // loop through the motors
-  for(int k = 0; k < 2; k++){
-    int pwr, dir;
-    // evaluate the control signal
-    pid[k].evalu(pos[k], target[k], deltaT, pwr, dir);
-    // signal the motor
-    // Flip direction for Right Arm motor aka the 1st motor
-    if (k==0){
-      dir *= -1;
-      setMotor(dir, DIRECTION_PINS[k], pwr, PWM_PINS[k]);
-    } else {
-      setMotor(dir, DIRECTION_PINS[k], pwr, PWM_PINS[k]);
-    }
-  }
-  // Print arm information every 10x this function is called
-  if (counter % 10 == 0) {
-    for(int k = 0; k < 2; k++){
-      if (k == 1) {
-      Serial.print("                                                     ");
-      }
-      Serial.print("Target of motor ");
-      Serial.print(k+1);
-      Serial.print(": ");
-      Serial.print(target[k]);
-      Serial.print(" ");
-      Serial.print("Position of encoder: ");
-      Serial.print(pos[k]);
-      Serial.println(" ");
-    }
-  }
-  counter++;
+/** 
+ * Test Bridge - Allows web app to perform a simple test to verify successful connection to MCU.
+ * 
+ * @return Arduino's millis(), rounded to the nearest millisecond
+ */
+int getStatus() {
+  // For real code, return a Bridge-supported structured type
+  // if available, or simple values.
+  return (int) millis();
 }
 
-void resetEncoders() {
-  // Through testing, -20 ticks has been more effective than 0
-  firstEncoder.setEncoderCount(-20.0);
-  secondEncoder.setEncoderCount(-20.0);
+/** Meant to be called by the bridge */
+float getTemp(int side) {
+  outputDebugLine("GET TEMP CALLED");
+  if (side == 1) {
+    return rightThermo.getDegreesFahrenheit();
+  } else if (side == 0) {
+    return leftThermo.getDegreesFahrenheit();
+  } else {
+    return -999.9;
+  }
 }
 
-void updateButtonState() {
-  // Checks to see if the new reading is the same as the existing state
-  if (leftButtonState != digitalRead(leftButton)) {
-    // If not, Update to the leftButtonState
-    leftButtonState = digitalRead(leftButton);
-    if (leftButtonState == HIGH) {
-      // If the button was just pressed, toggle the target position
-      if (target[0] == highPos) {
-        target[0] = lowPos;
-      } else {
-        target[0] = highPos;
-      }
-    }
+void setState(int side, bool state) {
+  outputDebugLine("SET STATE CALLED");
+  if (side == 1) {
+    rightArmState = state;
+  } else if (side == 0) {
+    leftArmState = state;
+  } else {
+    outputDebugLine("TRIED TO CALL SETSTATE WITH INVALID SIDE");
   }
+}
 
-  // Checks to see if the new reading is the same as the existing state
-  if (rightButtonState != digitalRead(rightButton)) {
-    // If not, Update to the rightButtonState
-    rightButtonState = digitalRead(rightButton);
-    if (rightButtonState == HIGH) {
-      // If the button was just pressed, toggle the target position
-      if (target[1] == highPos) {
-        target[1] = lowPos;
-      } else {
-        target[1] = highPos;
-      }
-    }
-  }
-  
-  // Zero the motor encoders right when home button is pressed
-  if (homeButtonState != digitalRead(homeButton)) {
-    homeButtonState = digitalRead(homeButton);
-    if (homeButtonState == HIGH) {
-      resetEncoders();
-    }
-  }
+// Emergency stop
+void stopAll() {
+  outputDebugLine("EMERGENCY STOP");
+  setLed(true);
+  // Coast Motors
+  motorA.run_motor(0, 0);
+  motorB.run_motor(0, 0);
+  eStopEnabled = true;
+}
+
+// End emergency stop
+void resumeAll() {
+  outputDebugLine("DISABLE EMERGENCY STOP");
+  setLed(false);
+  eStopEnabled = false;
 }
 
 void setup() 
 {
+  pinMode(Constants::LED_PIN, OUTPUT);
+  digitalWrite(Constants::LED_PIN, LOW);
+  leftThermo.setup();
+  rightThermo.setup();
+  motorA.begin();
+  motorB.begin();
+  leftButton.setup();
+  rightButton.setup();
+  eStopButton.setup();
   Serial.begin(9600);
-  sensor1.begin();
-  sensor2.begin();
-  
-  //define pins
-  for (int k = 0; k < 2; k++) {
-    // MOTOR
-    pinMode(DIRECTION_PINS[k], OUTPUT);
-    pinMode(PWM_PINS[k], OUTPUT);
-    pinMode(BRAKE_PINS[k], OUTPUT);
-
-    pid[k].setParams(3,0.15,0.0,50,255);
-  }
-
-  resetEncoders();
-  // Tell Motor #1 to stop
-  setMotor(1, DIRECTION_PINS[0], 0.0, PWM_PINS[0]);
-
-  // Initialize the button pins as inputs:
-  pinMode(leftButton, INPUT);   
-  pinMode(rightButton, INPUT);
-  pinMode(homeButton, INPUT);
 }
 
-void loop() 
-{
+void checkButtons() {
+  leftButton.periodic();
+  rightButton.periodic();
+  eStopButton.periodic();
 
-  /* Request and report temperature ever 30 sec */
-  if (millis()-lastTempMilli >= 30000) {
-    lastTempMilli = millis();
-    requestTemps();
-    lastTempInProgressMilli = millis();
+  if (leftButton.onRisingEdge()) {
+    // If the button was just pressed, toggle the matching arm state
+    leftArmState = !leftArmState;
+  }
 
-    while (millis()-lastTempInProgressMilli < 750) {
-      if (millis()-lastMilli > 20) {
-        lastMilli = millis();  
-
-        updateButtonState();
-        updatePID();
-      }
+  if (rightButton.onRisingEdge()) {
+    // If the button was just pressed, toggle the matching arm state
+    rightArmState = !rightArmState;
+  }
+  
+  // Emergency stop toggle
+  if (eStopButton.onRisingEdge()) {
+    if (eStopEnabled) {
+      resumeAll();
+    } else {
+      stopAll();
     }
-    updateTemperatures();
   }
-  if (millis()-lastMilli > 20) {
-    lastMilli = millis();  
+}
 
-    updateButtonState();
-    updatePID();
-
+/** Applies the state to the motor setpoints and runs motors. Should be called periodically. */
+void updateSetpoints() {
+  
+  if (leftArmState) {
+    motorA.run_motor(-1, setpoints[0]);
+  } else {
+    motorA.run_motor(1, setpoints[0]);
   }
+  
+  if (rightArmState) {
+    motorB.run_motor(-1, setpoints[1]);
+  } else {
+    motorB.run_motor(1, setpoints[1]);
+  }
+
+  // TODO: Delete when Uno Q timer code replaces loop()
+  delay(20);
+}
+
+void periodic() {
+  // Keep time-critical hardware behavior here
+  // Do not depend on web requests for safety-critical timing.
+
+  // Can put thermometer calls into a periodic() called less often
+  leftThermo.periodic();
+  rightThermo.periodic();
+
+  // Check buttons and update state as necessary
+  checkButtons();
+  // Apply motor output based on arm states
+  if (!eStopEnabled) {
+    updateSetpoints();
+  }
+
+}
+
+void loop() {
+  periodic();
 }
